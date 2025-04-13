@@ -1,18 +1,20 @@
 {
-  "name": "live-files",
-  "version": "1.0.0",
-  "main": "liveFiles.js",
+  "name": "livefiles",
+  "version": "0.0.1",
+  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "format": "prettier-standard --format"
   },
-  "keywords": [],
+  "keywords": [
+    "File maanager",
+    "files"
+  ],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "description": "",
+  "license": "GPLv3",
+  "description": "A dead simple Nodejs file manager.",
   "dependencies": {
-    "b4a": "^1.6.7",
-    "holesail": "^1.10.1",
-    "hyper-cmd-lib-keys": "^0.1.1"
+    "fs": "npm:bare-fs@^4.1.2",
+    "http": "npm:bare-http1@^4.0.2"
   }
 }
