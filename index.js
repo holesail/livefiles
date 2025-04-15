@@ -2,10 +2,13 @@ const http = require('http')
 const fs = require('fs')
 const path = require('path')
 const qs = require('querystring')
+const ReadyResource = require('ready-resource')
+
 const { base64Logo } = require('./logo.js')
 
-class Livefiles {
+class Livefiles extends ReadyResource{
   constructor (opts = {}) {
+    super()
     if (opts.path && fs.existsSync(opts.path)) {
       this.path = opts.path
     } else {
@@ -31,7 +34,7 @@ class Livefiles {
       opts.host && typeof opts.host !== 'boolean' ? opts.host : '127.0.0.1'
   }
 
-  start () {
+  async _open () {
     // initialise local http server
     this.server = http.createServer(this.handleRequest.bind(this))
     this.server.listen(this.port, this.host, err => {
@@ -44,7 +47,7 @@ class Livefiles {
     })
   }
 
-  destroy () {
+  async _close () {
     if (this.server) {
       this.server.close()
     }

@@ -38,5 +38,8 @@ const filemanager = new Livefiles({
   port: 8989               // Port to listen on (default: 5409)
 })
 
-filemanager.start()
+// start the filemanager server
+await filemanager.ready()
+//close the server
+await filemanager.close()
 ```

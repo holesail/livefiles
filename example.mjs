@@ -8,4 +8,5 @@ const filemanager = new Livefiles({
   host: 'localhost',
   port: 8989
 })
-filemanager.start()
+await filemanager.ready()
+await filemanager.close()

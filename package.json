@@ -15,6 +15,7 @@
   "description": "A dead simple Nodejs file manager.",
   "dependencies": {
     "fs": "npm:bare-fs@^4.1.2",
-    "http": "npm:bare-http1@^4.0.2"
+    "http": "npm:bare-http1@^4.0.2",
+    "ready-resource": "^1.1.2"
   }
 }
