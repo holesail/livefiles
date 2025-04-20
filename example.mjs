@@ -9,7 +9,5 @@ const filemanager = new Livefiles({
   port: 6969
 })
 
-// console.log(filemanager);
-console.log(filemanager.info);
 await filemanager.ready()
-// await filemanager.close()
+await filemanager.close()
