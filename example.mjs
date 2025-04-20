@@ -6,7 +6,8 @@ const filemanager = new Livefiles({
   username: 'supersu',
   password: 'supersu',
   host: 'localhost',
-  port: 8989
+  port: 6969
 })
+
 await filemanager.ready()
 await filemanager.close()
