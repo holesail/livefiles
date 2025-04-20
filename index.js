@@ -666,6 +666,17 @@ class Livefiles extends ReadyResource{
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;')
   }
+
+  get info() {
+    return {
+      server : this.server,
+      host : this.host,
+      port : this.port,
+      role : this.role,
+      username : this.username,
+      password : this.password,
+    }
+  }
 }
 
 module.exports = Livefiles
