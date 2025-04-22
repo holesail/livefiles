@@ -669,7 +669,7 @@ class Livefiles extends ReadyResource{
 
   get info() {
     return {
-      server : this.server,
+      type : 'filemanager',
       host : this.host,
       port : this.port,
       role : this.role,
