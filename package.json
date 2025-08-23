@@ -10,11 +10,18 @@
     "File manager",
     "files"
   ],
+  "imports": {
+    "util": {
+      "bare": "bare-utils",
+      "default": "util"
+    }
+  },
   "author": "supersuryaansh",
   "license": "GPLv3",
   "description": "A dead simple Nodejs file manager.",
   "dependencies": {
-    "fs": "npm:bare-fs@^4.1.2",
+    "bare-utils": "^1.5.1",
+    "fs": "npm:bare-fs@^4.2.1",
     "http": "npm:bare-http1@^4.0.2",
     "ready-resource": "^1.1.2"
   }
