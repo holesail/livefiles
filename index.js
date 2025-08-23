@@ -15,7 +15,7 @@ const writeFile = promisify(fs.writeFile)
 const access = promisify(fs.access)
 
 class Livefiles extends ReadyResource {
-  constructor(opts = {}) {
+  constructor (opts = {}) {
     super()
     if (opts.path && fs.existsSync(opts.path)) {
       this.path = opts.path
@@ -49,7 +49,7 @@ class Livefiles extends ReadyResource {
     this.streamBufferSize = opts.streamBufferSize || 64 * 1024 // 64KB chunks
   }
 
-  async _open() {
+  async _open () {
     // initialise local http server
     this.server = http.createServer(this.handleRequest.bind(this))
     this.server.listen(this.port, this.host, err => {
@@ -61,14 +61,14 @@ class Livefiles extends ReadyResource {
     })
   }
 
-  async _close() {
+  async _close () {
     if (this.server) {
       this.server.close()
       this.logger.log({ type: 1, msg: 'Livefiles server closed' })
     }
   }
 
-  handleRequest(req, res) {
+  handleRequest (req, res) {
     const urlPath = decodeURIComponent(req.url)
     const fullPath = path.join(this.path, urlPath)
 
@@ -86,7 +86,7 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  authenticate(req) {
+  authenticate (req) {
     const authHeader = req.headers.authorization
     if (authHeader) {
       const encodedCredentials = authHeader.split(' ')[1]
@@ -99,7 +99,7 @@ class Livefiles extends ReadyResource {
     return false
   }
 
-  async handleGetRequest(fullPath, urlPath, res, req) {
+  async handleGetRequest (fullPath, urlPath, res, req) {
     try {
       const stats = await stat(fullPath)
 
@@ -120,7 +120,7 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  handlePostRequest(req, res, urlPath) {
+  handlePostRequest (req, res, urlPath) {
     let body = ''
     let totalSize = 0
 
@@ -188,7 +188,7 @@ class Livefiles extends ReadyResource {
     })
   }
 
-  async calculateDirectorySize(dirPath) {
+  async calculateDirectorySize (dirPath) {
     let totalSize = 0
     try {
       const items = await readdir(dirPath, { withFileTypes: true })
@@ -222,7 +222,7 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  async listDirectory(fullPath, urlPath, res) {
+  async listDirectory (fullPath, urlPath, res) {
     try {
       const files = await readdir(fullPath, { withFileTypes: true })
 
@@ -578,7 +578,7 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  formatBytes(bytes, decimals = 2) {
+  formatBytes (bytes, decimals = 2) {
     if (bytes === 0) return '0 Bytes'
     const k = 1024
     const dm = decimals < 0 ? 0 : decimals
@@ -587,7 +587,7 @@ class Livefiles extends ReadyResource {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i]
   }
 
-  serveFile(fullPath, req, res) {
+  serveFile (fullPath, req, res) {
     const extension = path.extname(fullPath).toLowerCase()
     const contentType =
       this.getContentType(extension) || 'application/octet-stream'
@@ -673,7 +673,7 @@ class Livefiles extends ReadyResource {
     })
   }
 
-  async createFolder(newFullPath, res, urlPath) {
+  async createFolder (newFullPath, res, urlPath) {
     try {
       await mkdir(newFullPath, { recursive: true })
       this.logger.log({ type: 1, msg: `Created folder: ${newFullPath}` })
@@ -686,7 +686,7 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  async createFile(newFullPath, res, urlPath) {
+  async createFile (newFullPath, res, urlPath) {
     try {
       await writeFile(newFullPath, '')
       this.logger.log({ type: 1, msg: `Created file: ${newFullPath}` })
@@ -699,7 +699,7 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  getContentType(extension) {
+  getContentType (extension) {
     const mimeTypes = {
       '.html': 'text/html',
       '.css': 'text/css',
@@ -746,7 +746,7 @@ class Livefiles extends ReadyResource {
     return mimeTypes[extension] || null
   }
 
-  async getDirectoryOptions() {
+  async getDirectoryOptions () {
     const basePath = this.path
     const traverseDirectory = async (dir, depth = 0) => {
       let options = ''
@@ -783,7 +783,7 @@ class Livefiles extends ReadyResource {
     return await traverseDirectory(basePath)
   }
 
-  escapeHtml(unsafe = '') {
+  escapeHtml (unsafe = '') {
     return unsafe
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -792,7 +792,7 @@ class Livefiles extends ReadyResource {
       .replace(/'/g, '&#039;')
   }
 
-  get info() {
+  get info () {
     return {
       type: 'filemanager',
       host: this.host,
