@@ -15,13 +15,16 @@ const writeFile = promisify(fs.writeFile)
 const access = promisify(fs.access)
 
 class Livefiles extends ReadyResource {
-  constructor (opts = {}) {
+  constructor(opts = {}) {
     super()
     if (opts.path && fs.existsSync(opts.path)) {
       this.path = opts.path
     } else {
       throw new Error('INCORRECT OR NO PATH SPECIFIED')
     }
+
+    // Initialize logger following holesail pattern
+    this.logger = opts.logger || { log: () => { } }
 
     // default role is user
     // user can view and download files but an admin can create and delete files
@@ -46,26 +49,26 @@ class Livefiles extends ReadyResource {
     this.streamBufferSize = opts.streamBufferSize || 64 * 1024 // 64KB chunks
   }
 
-  async _open () {
+  async _open() {
     // initialise local http server
     this.server = http.createServer(this.handleRequest.bind(this))
     this.server.listen(this.port, this.host, err => {
       if (err) {
-        console.error(
-          `Failed to start server on port ${this.port}: ${err.message}`
-        )
+        this.logger.log({ type: 3, msg: `Failed to start server on port ${this.port}: ${err.message}` })
         process.exit(1)
       }
+      this.logger.log({ type: 1, msg: `Livefiles server started on ${this.host}:${this.port}` })
     })
   }
 
-  async _close () {
+  async _close() {
     if (this.server) {
       this.server.close()
+      this.logger.log({ type: 1, msg: 'Livefiles server closed' })
     }
   }
 
-  handleRequest (req, res) {
+  handleRequest(req, res) {
     const urlPath = decodeURIComponent(req.url)
     const fullPath = path.join(this.path, urlPath)
 
@@ -83,7 +86,7 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  authenticate (req) {
+  authenticate(req) {
     const authHeader = req.headers.authorization
     if (authHeader) {
       const encodedCredentials = authHeader.split(' ')[1]
@@ -96,7 +99,7 @@ class Livefiles extends ReadyResource {
     return false
   }
 
-  async handleGetRequest (fullPath, urlPath, res, req) {
+  async handleGetRequest(fullPath, urlPath, res, req) {
     try {
       const stats = await stat(fullPath)
 
@@ -110,13 +113,14 @@ class Livefiles extends ReadyResource {
         res.writeHead(404, { 'Content-Type': 'text/plain' })
         res.end('File Not Found')
       } else {
+        this.logger.log({ type: 3, msg: `Error handling GET request: ${err.message}` })
         res.writeHead(500, { 'Content-Type': 'text/plain' })
         res.end('Internal Server Error')
       }
     }
   }
 
-  handlePostRequest (req, res, urlPath) {
+  handlePostRequest(req, res, urlPath) {
     let body = ''
     let totalSize = 0
 
@@ -169,12 +173,14 @@ class Livefiles extends ReadyResource {
           await this.createFile(newFullPath, res, urlPath)
         }
       } catch (error) {
+        this.logger.log({ type: 3, msg: `Error processing POST request: ${error.message}` })
         res.writeHead(500, { 'Content-Type': 'text/plain' })
         res.end('Internal Server Error')
       }
     })
+
     req.on('error', (err) => {
-      this.logger?.error('Request error:', err)
+      this.logger.log({ type: 3, msg: `Request error: ${err.message}` })
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'text/plain' })
         res.end('Request processing error')
@@ -182,7 +188,7 @@ class Livefiles extends ReadyResource {
     })
   }
 
-  async calculateDirectorySize (dirPath) {
+  async calculateDirectorySize(dirPath) {
     let totalSize = 0
     try {
       const items = await readdir(dirPath, { withFileTypes: true })
@@ -211,12 +217,12 @@ class Livefiles extends ReadyResource {
 
       return totalSize
     } catch (e) {
-      console.log(e)
+      this.logger.log({ type: 2, msg: `Error calculating directory size: ${e.message}` })
       return 0
     }
   }
 
-  async listDirectory (fullPath, urlPath, res) {
+  async listDirectory(fullPath, urlPath, res) {
     try {
       const files = await readdir(fullPath, { withFileTypes: true })
 
@@ -566,12 +572,13 @@ class Livefiles extends ReadyResource {
       res.writeHead(200, { 'Content-Type': 'text/html' })
       res.end(htmlResponse)
     } catch (err) {
+      this.logger.log({ type: 3, msg: `Error listing directory: ${err.message}` })
       res.writeHead(500, { 'Content-Type': 'text/plain' })
       res.end('Internal Server Error')
     }
   }
 
-  formatBytes (bytes, decimals = 2) {
+  formatBytes(bytes, decimals = 2) {
     if (bytes === 0) return '0 Bytes'
     const k = 1024
     const dm = decimals < 0 ? 0 : decimals
@@ -580,13 +587,14 @@ class Livefiles extends ReadyResource {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i]
   }
 
-  serveFile (fullPath, req, res) {
+  serveFile(fullPath, req, res) {
     const extension = path.extname(fullPath).toLowerCase()
     const contentType =
       this.getContentType(extension) || 'application/octet-stream'
 
     fs.stat(fullPath, (err, stats) => {
       if (err) {
+        this.logger.log({ type: 3, msg: `Error reading file stats: ${err.message}` })
         res.writeHead(500, { 'Content-Type': 'text/plain' })
         res.end('Error reading file.')
         return
@@ -631,7 +639,7 @@ class Livefiles extends ReadyResource {
 
         // Handle stream errors
         fileStream.on('error', (err) => {
-          this.logger?.error('File stream error:', err)
+          this.logger.log({ type: 3, msg: `File stream error: ${err.message}` })
           if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'text/plain' })
             res.end('Error reading file')
@@ -655,7 +663,7 @@ class Livefiles extends ReadyResource {
 
         // Handle stream errors
         fileStream.on('error', (err) => {
-          this.logger?.error('File stream error:', err)
+          this.logger.log({ type: 3, msg: `File stream error: ${err.message}` })
           if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'text/plain' })
             res.end('Error reading file')
@@ -665,29 +673,33 @@ class Livefiles extends ReadyResource {
     })
   }
 
-  async createFolder (newFullPath, res, urlPath) {
+  async createFolder(newFullPath, res, urlPath) {
     try {
       await mkdir(newFullPath, { recursive: true })
+      this.logger.log({ type: 1, msg: `Created folder: ${newFullPath}` })
       res.writeHead(302, { Location: urlPath })
       res.end()
     } catch (err) {
+      this.logger.log({ type: 3, msg: `Error creating folder: ${err.message}` })
       res.writeHead(500, { 'Content-Type': 'text/plain' })
       res.end('Error creating folder.')
     }
   }
 
-  async createFile (newFullPath, res, urlPath) {
+  async createFile(newFullPath, res, urlPath) {
     try {
       await writeFile(newFullPath, '')
+      this.logger.log({ type: 1, msg: `Created file: ${newFullPath}` })
       res.writeHead(302, { Location: urlPath })
       res.end()
     } catch (err) {
+      this.logger.log({ type: 3, msg: `Error creating file: ${err.message}` })
       res.writeHead(500, { 'Content-Type': 'text/plain' })
       res.end('Error creating file.')
     }
   }
 
-  getContentType (extension) {
+  getContentType(extension) {
     const mimeTypes = {
       '.html': 'text/html',
       '.css': 'text/css',
@@ -734,7 +746,7 @@ class Livefiles extends ReadyResource {
     return mimeTypes[extension] || null
   }
 
-  async getDirectoryOptions () {
+  async getDirectoryOptions() {
     const basePath = this.path
     const traverseDirectory = async (dir, depth = 0) => {
       let options = ''
@@ -771,7 +783,7 @@ class Livefiles extends ReadyResource {
     return await traverseDirectory(basePath)
   }
 
-  escapeHtml (unsafe = '') {
+  escapeHtml(unsafe = '') {
     return unsafe
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -780,7 +792,7 @@ class Livefiles extends ReadyResource {
       .replace(/'/g, '&#039;')
   }
 
-  get info () {
+  get info() {
     return {
       type: 'filemanager',
       host: this.host,
