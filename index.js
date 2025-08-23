@@ -3,10 +3,18 @@ const fs = require('fs')
 const path = require('path')
 const qs = require('querystring')
 const ReadyResource = require('ready-resource')
+const { promisify } = require('util')
 
 const { base64Logo } = require('./logo.js')
 
-class Livefiles extends ReadyResource{
+// Convert fs methods to promises
+const stat = promisify(fs.stat)
+const readdir = promisify(fs.readdir)
+const mkdir = promisify(fs.mkdir)
+const writeFile = promisify(fs.writeFile)
+const access = promisify(fs.access)
+
+class Livefiles extends ReadyResource {
   constructor (opts = {}) {
     super()
     if (opts.path && fs.existsSync(opts.path)) {
@@ -14,6 +22,9 @@ class Livefiles extends ReadyResource{
     } else {
       throw new Error('INCORRECT OR NO PATH SPECIFIED')
     }
+
+    // Initialize logger following holesail pattern
+    this.logger = opts.logger || { log: () => { } }
 
     // default role is user
     // user can view and download files but an admin can create and delete files
@@ -32,6 +43,10 @@ class Livefiles extends ReadyResource{
 
     this.host = this.host =
       opts.host && typeof opts.host !== 'boolean' ? opts.host : '127.0.0.1'
+
+    // Memory management settings
+    this.maxRequestSize = opts.maxRequestSize || 10 * 1024 * 1024 // 10MB default
+    this.streamBufferSize = opts.streamBufferSize || 64 * 1024 // 64KB chunks
   }
 
   async _open () {
@@ -39,17 +54,17 @@ class Livefiles extends ReadyResource{
     this.server = http.createServer(this.handleRequest.bind(this))
     this.server.listen(this.port, this.host, err => {
       if (err) {
-        console.error(
-          `Failed to start server on port ${this.port}: ${err.message}`
-        )
+        this.logger.log({ type: 3, msg: `Failed to start server on port ${this.port}: ${err.message}` })
         process.exit(1)
       }
+      this.logger.log({ type: 1, msg: `Livefiles server started on ${this.host}:${this.port}` })
     })
   }
 
   async _close () {
     if (this.server) {
       this.server.close()
+      this.logger.log({ type: 1, msg: 'Livefiles server closed' })
     }
   }
 
@@ -84,125 +99,185 @@ class Livefiles extends ReadyResource{
     return false
   }
 
-  handleGetRequest (fullPath, urlPath, res, req) {
-    fs.stat(fullPath, (err, stats) => {
-      if (err && err.code === 'ENOENT') {
-        res.writeHead(404, { 'Content-Type': 'text/plain' })
-        res.end('File Not Found')
-        return
-      } else if (err) {
-        res.writeHead(500, { 'Content-Type': 'text/plain' })
-        res.end('Internal Server Error')
-        return
-      }
+  async handleGetRequest (fullPath, urlPath, res, req) {
+    try {
+      const stats = await stat(fullPath)
 
       if (stats.isDirectory()) {
-        this.listDirectory(fullPath, urlPath, res)
+        await this.listDirectory(fullPath, urlPath, res)
       } else if (stats.isFile()) {
         this.serveFile(fullPath, req, res)
       }
-    })
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('File Not Found')
+      } else {
+        this.logger.log({ type: 3, msg: `Error handling GET request: ${err.message}` })
+        res.writeHead(500, { 'Content-Type': 'text/plain' })
+        res.end('Internal Server Error')
+      }
+    }
   }
 
   handlePostRequest (req, res, urlPath) {
     let body = ''
+    let totalSize = 0
+
+    // Memory protection: limit request size
     req.on('data', chunk => {
+      totalSize += chunk.length
+
+      // Prevent memory exhaustion from large requests
+      if (totalSize > this.maxRequestSize) {
+        res.writeHead(413, { 'Content-Type': 'text/plain' })
+        res.end('Request entity too large')
+        req.destroy()
+        return
+      }
+
       body += chunk.toString()
     })
-    req.on('end', () => {
-      const formData = qs.parse(body)
-      const itemType = formData.item_type
-      const name = formData.name
-      const directory = formData.directory
 
-      // Basic validation
-      if (
-        !itemType ||
-        !name ||
-        typeof name !== 'string' ||
-        !['folder', 'file'].includes(itemType)
-      ) {
-        res.writeHead(400, { 'Content-Type': 'text/plain' })
-        res.end('Bad Request: Missing or invalid form data.')
-        return
+    req.on('end', async () => {
+      try {
+        const formData = qs.parse(body)
+        const itemType = formData.item_type
+        const name = formData.name
+        const directory = formData.directory
+
+        // Basic validation
+        if (
+          !itemType ||
+          !name ||
+          typeof name !== 'string' ||
+          !['folder', 'file'].includes(itemType)
+        ) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' })
+          res.end('Bad Request: Missing or invalid form data.')
+          return
+        }
+
+        // Check user type for folder creation
+        if (itemType === 'folder' && this.role !== 'admin') {
+          res.writeHead(403, { 'Content-Type': 'text/plain' })
+          res.end('Forbidden: Only admin users can create folders.')
+          return
+        }
+
+        const newFullPath = path.join(this.path, directory || '.', name)
+
+        if (itemType === 'folder') {
+          await this.createFolder(newFullPath, res, urlPath)
+        } else if (itemType === 'file') {
+          await this.createFile(newFullPath, res, urlPath)
+        }
+      } catch (error) {
+        this.logger.log({ type: 3, msg: `Error processing POST request: ${error.message}` })
+        res.writeHead(500, { 'Content-Type': 'text/plain' })
+        res.end('Internal Server Error')
       }
+    })
 
-      // Check user type for folder creation
-      if (itemType === 'folder' && this.role !== 'admin') {
-        res.writeHead(403, { 'Content-Type': 'text/plain' })
-        res.end('Forbidden: Only admin users can create folders.')
-        return
-      }
-
-      const newFullPath = path.join(this.path, directory || '.', name)
-
-      if (itemType === 'folder') {
-        this.createFolder(newFullPath, res, urlPath)
-      } else if (itemType === 'file') {
-        this.createFile(newFullPath, res, urlPath)
+    req.on('error', (err) => {
+      this.logger.log({ type: 3, msg: `Request error: ${err.message}` })
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' })
+        res.end('Request processing error')
       }
     })
   }
 
-  calculateDirectorySize (dirPath) {
+  async calculateDirectorySize (dirPath) {
     let totalSize = 0
     try {
-      const items = fs.readdirSync(dirPath, { withFileTypes: true })
+      const items = await readdir(dirPath, { withFileTypes: true })
 
-      items.forEach(item => {
-        const itemPath = path.join(dirPath, item.name)
-        if (!item.isDirectory()) {
-          totalSize += fs.statSync(itemPath).size
+      // Process files in batches to avoid blocking event loop
+      for (let i = 0; i < items.length; i += 10) {
+        const batch = items.slice(i, i + 10)
+
+        await Promise.all(batch.map(async (item) => {
+          if (!item.isDirectory()) {
+            try {
+              const itemPath = path.join(dirPath, item.name)
+              const stats = await stat(itemPath)
+              totalSize += stats.size
+            } catch (e) {
+              // Skip files that can't be accessed
+            }
+          }
+        }))
+
+        // Yield control to event loop between batches
+        if (i + 10 < items.length) {
+          await new Promise(resolve => setImmediate(resolve))
         }
-      })
+      }
 
       return totalSize
     } catch (e) {
-      console.log(e)
+      this.logger.log({ type: 2, msg: `Error calculating directory size: ${e.message}` })
       return 0
     }
   }
 
-  listDirectory (fullPath, urlPath, res) {
-    fs.readdir(fullPath, { withFileTypes: true }, (err, files) => {
-      if (err) {
-        res.writeHead(500, { 'Content-Type': 'text/plain' })
-        res.end('Internal Server Error')
-        return
-      }
+  async listDirectory (fullPath, urlPath, res) {
+    try {
+      const files = await readdir(fullPath, { withFileTypes: true })
 
       // Separate and sort directories and files
       const folders = files.filter(file => file.isDirectory())
       const normalFiles = files.filter(file => !file.isDirectory())
+      const allFiles = [...folders, ...normalFiles]
 
-      const directoryList = [...folders, ...normalFiles]
-        .filter(file => {
+      // Process files in batches to avoid blocking
+      const directoryItems = []
+
+      for (let i = 0; i < allFiles.length; i += 5) {
+        const batch = allFiles.slice(i, i + 5)
+
+        const batchResults = await Promise.all(batch.map(async (file) => {
           try {
-            fs.accessSync(path.join(fullPath, file.name), fs.constants.R_OK)
-            return true
-          } catch {
-            return false // Skip if not readable
-          }
-        })
-        .map(file => {
-          const filePath = path.join(urlPath, file.name)
-          const safeFileName = this.escapeHtml(file.name)
-          const iconHtml = file.isDirectory()
-            ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4042bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
-            : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E94E47" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
-          const downloadButton = file.isDirectory()
-            ? `<a class="open--btn" href="${filePath}">Enter</a>`
-            : `<a href="${filePath}" download>Download</a>`
+            // Check if file is readable
+            await access(path.join(fullPath, file.name), fs.constants.R_OK)
 
-          // Get file or folder size
-          const size = file.isDirectory()
-            ? this.formatBytes(
-                this.calculateDirectorySize(path.join(fullPath, file.name))
-              )
-            : this.formatBytes(fs.statSync(path.join(fullPath, file.name)).size)
-          return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="download--btn">${downloadButton}</td><td>${size}</td></tr>`
-        })
-        .join('')
+            const filePath = path.join(urlPath, file.name)
+            const safeFileName = this.escapeHtml(file.name)
+            const iconHtml = file.isDirectory()
+              ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4042bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
+              : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E94E47" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
+
+            const downloadButton = file.isDirectory()
+              ? `<a class="open--btn" href="${filePath}">Enter</a>`
+              : `<a href="${filePath}" download>Download</a>`
+
+            // Get file or folder size (optimized)
+            let size
+            if (file.isDirectory()) {
+              // For directories, calculate size asynchronously
+              const dirSize = await this.calculateDirectorySize(path.join(fullPath, file.name))
+              size = this.formatBytes(dirSize)
+            } else {
+              const stats = await stat(path.join(fullPath, file.name))
+              size = this.formatBytes(stats.size)
+            }
+
+            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="download--btn">${downloadButton}</td><td>${size}</td></tr>`
+          } catch {
+            return null // Skip if not readable
+          }
+        }))
+
+        directoryItems.push(...batchResults.filter(item => item !== null))
+
+        // Yield control to event loop between batches
+        if (i + 5 < allFiles.length) {
+          await new Promise(resolve => setImmediate(resolve))
+        }
+      }
+
+      const directoryList = directoryItems.join('')
 
       let createFormHtml = ''
       if (this.role === 'admin') {
@@ -223,7 +298,7 @@ class Livefiles extends ReadyResource{
             <label for="directory">Select Directory</label>
             <select name="directory" id="directory">
                 <option value="">Current Directory</option>
-                ${this.getDirectoryOptions()}
+                ${await this.getDirectoryOptions()}
             </select>
         </div>
         <button class="btn" type="submit">Create</button>
@@ -496,7 +571,11 @@ class Livefiles extends ReadyResource{
             `
       res.writeHead(200, { 'Content-Type': 'text/html' })
       res.end(htmlResponse)
-    })
+    } catch (err) {
+      this.logger.log({ type: 3, msg: `Error listing directory: ${err.message}` })
+      res.writeHead(500, { 'Content-Type': 'text/plain' })
+      res.end('Internal Server Error')
+    }
   }
 
   formatBytes (bytes, decimals = 2) {
@@ -515,6 +594,7 @@ class Livefiles extends ReadyResource{
 
     fs.stat(fullPath, (err, stats) => {
       if (err) {
+        this.logger.log({ type: 3, msg: `Error reading file stats: ${err.message}` })
         res.writeHead(500, { 'Content-Type': 'text/plain' })
         res.end('Error reading file.')
         return
@@ -539,7 +619,11 @@ class Livefiles extends ReadyResource{
         }
 
         const chunkSize = end - start + 1
-        const fileStream = fs.createReadStream(fullPath, { start, end })
+        const fileStream = fs.createReadStream(fullPath, {
+          start,
+          end,
+          highWaterMark: this.streamBufferSize // Control memory usage
+        })
 
         res.writeHead(206, {
           'Content-Range': `bytes ${start}-${end}/${fileSize}`,
@@ -552,8 +636,20 @@ class Livefiles extends ReadyResource{
         })
 
         fileStream.pipe(res)
+
+        // Handle stream errors
+        fileStream.on('error', (err) => {
+          this.logger.log({ type: 3, msg: `File stream error: ${err.message}` })
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'text/plain' })
+            res.end('Error reading file')
+          }
+        })
       } else {
-        // Normal download
+        // Normal download with controlled buffer size
+        const fileStream = fs.createReadStream(fullPath, {
+          highWaterMark: this.streamBufferSize // Control memory usage
+        })
         res.writeHead(200, {
           'Content-Length': fileSize,
           'Content-Type': contentType,
@@ -563,33 +659,44 @@ class Livefiles extends ReadyResource{
           )}"`
         })
 
-        fs.createReadStream(fullPath).pipe(res)
+        fileStream.pipe(res)
+
+        // Handle stream errors
+        fileStream.on('error', (err) => {
+          this.logger.log({ type: 3, msg: `File stream error: ${err.message}` })
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'text/plain' })
+            res.end('Error reading file')
+          }
+        })
       }
     })
   }
 
-  createFolder (newFullPath, res, urlPath) {
-    fs.mkdir(newFullPath, { recursive: true }, err => {
-      if (err) {
-        res.writeHead(500, { 'Content-Type': 'text/plain' })
-        res.end('Error creating folder.')
-        return
-      }
+  async createFolder (newFullPath, res, urlPath) {
+    try {
+      await mkdir(newFullPath, { recursive: true })
+      this.logger.log({ type: 1, msg: `Created folder: ${newFullPath}` })
       res.writeHead(302, { Location: urlPath })
       res.end()
-    })
+    } catch (err) {
+      this.logger.log({ type: 3, msg: `Error creating folder: ${err.message}` })
+      res.writeHead(500, { 'Content-Type': 'text/plain' })
+      res.end('Error creating folder.')
+    }
   }
 
-  createFile (newFullPath, res, urlPath) {
-    fs.writeFile(newFullPath, '', err => {
-      if (err) {
-        res.writeHead(500, { 'Content-Type': 'text/plain' })
-        res.end('Error creating file.')
-        return
-      }
+  async createFile (newFullPath, res, urlPath) {
+    try {
+      await writeFile(newFullPath, '')
+      this.logger.log({ type: 1, msg: `Created file: ${newFullPath}` })
       res.writeHead(302, { Location: urlPath })
       res.end()
-    })
+    } catch (err) {
+      this.logger.log({ type: 3, msg: `Error creating file: ${err.message}` })
+      res.writeHead(500, { 'Content-Type': 'text/plain' })
+      res.end('Error creating file.')
+    }
   }
 
   getContentType (extension) {
@@ -639,23 +746,41 @@ class Livefiles extends ReadyResource{
     return mimeTypes[extension] || null
   }
 
-  getDirectoryOptions () {
+  async getDirectoryOptions () {
     const basePath = this.path
-    const traverseDirectory = (dir, depth = 0) => {
+    const traverseDirectory = async (dir, depth = 0) => {
       let options = ''
-      const items = fs.readdirSync(dir, { withFileTypes: true })
-      items.forEach(item => {
-        if (item.isDirectory()) {
-          const itemPath = path.join(dir, item.name)
-          const displayPath = itemPath.replace(basePath, '')
-          const indent = '&nbsp;'.repeat(depth * 4)
-          options += `<option value="${displayPath}">${indent}${item.name}</option>`
-          options += traverseDirectory(itemPath, depth + 1)
+      try {
+        const items = await readdir(dir, { withFileTypes: true })
+
+        // Process directories in batches to avoid blocking
+        for (let i = 0; i < items.length; i += 10) {
+          const batch = items.slice(i, i + 10).filter(item => item.isDirectory())
+
+          for (const item of batch) {
+            const itemPath = path.join(dir, item.name)
+            const displayPath = itemPath.replace(basePath, '')
+            const indent = '&nbsp;'.repeat(depth * 4)
+            options += `<option value="${displayPath}">${indent}${item.name}</option>`
+
+            // Recursively traverse subdirectories (with depth limit)
+            if (depth < 5) { // Prevent infinite recursion
+              options += await traverseDirectory(itemPath, depth + 1)
+            }
+          }
+
+          // Yield control between batches
+          if (i + 10 < items.length) {
+            await new Promise(resolve => setImmediate(resolve))
+          }
         }
-      })
+      } catch (e) {
+        // Skip directories that can't be accessed
+      }
       return options
     }
-    return traverseDirectory(basePath)
+
+    return await traverseDirectory(basePath)
   }
 
   escapeHtml (unsafe = '') {
@@ -667,14 +792,16 @@ class Livefiles extends ReadyResource{
       .replace(/'/g, '&#039;')
   }
 
-  get info() {
+  get info () {
     return {
-      type : 'filemanager',
-      host : this.host,
-      port : this.port,
-      role : this.role,
-      username : this.username,
-      password : this.password,
+      type: 'filemanager',
+      host: this.host,
+      port: this.port,
+      role: this.role,
+      username: this.username,
+      password: this.password,
+      maxRequestSize: this.maxRequestSize,
+      streamBufferSize: this.streamBufferSize
     }
   }
 }
