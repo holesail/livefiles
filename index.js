@@ -341,7 +341,7 @@ class Livefiles extends ReadyResource {
               size = this.formatBytes(stats.size)
             }
 
-            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="size">${size}</td><td class="download--btn">${downloadButton}</td></tr>`
+            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="size"><p>${size}</p></td><td class="download--btn">${downloadButton}</td></tr>`
           } catch {
             return null // Skip if not readable
           }
@@ -390,6 +390,11 @@ class Livefiles extends ReadyResource {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <title>Directory Listing | Filemanager</title>
                     <style>
+                    * {
+                    padding: 0;
+                    margin: 0;
+                    box-sizing: border-box;
+                    }
                         body {
                         font-family: "Intern", sans-serif;
                         background-color: #f3f3f3;
@@ -404,20 +409,21 @@ class Livefiles extends ReadyResource {
                         display: flex;
                         flex-direction: row;
                         align-items: center; 
-                        margin: 2rem 2rem 1rem 2rem;
+                        margin: 1rem 2rem 1rem 2rem;
                         }
                         nav{
                         display:flex;
                         align-items: center;
-                        justify-content: center;
+                        justify-content: start;
                         gap: 10px;
+                        margin: 2rem;
                         }
                         nav p{
                         font-size: 3.4rem;
                         font-weight: 700;
                         }
                         .nav--icon{
-                        width: 80px;
+                        width: 60px;
                         }
                     h1 {
                         color: #444;
@@ -436,7 +442,7 @@ class Livefiles extends ReadyResource {
                     display: flex;
                     flex-direction: row;
                     flex-wrap: wrap;
-                    gap: 10px;
+                    gap: 4px;
                     }
                         .open--btn{
                         padding: 8px;
@@ -450,9 +456,10 @@ class Livefiles extends ReadyResource {
     padding: 0 2rem 2rem 2rem; 
                        }
                    table {
+                   border-spacing: 0 4px;
     width: 100%;
     max-width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
     border-radius: 15px;
     background-color: #fff;
 }
@@ -460,19 +467,10 @@ class Livefiles extends ReadyResource {
     border: 0.5px solid #bbb;
     border-radius: 15px;
     }
-
                     td {
                         text-align: left;
                         font-weight: 700;
                     }
-                        td:nth-child(odd){
-                        display: flex;
-                        align-items: center;
-                        gap: 10px;
-                        }
-                        td:nth-child(odd) a{
-                        width: 100%;
-                        }
                     th {
                     text-align: left;
                         border-bottom: 0.5px solid #bbb;
@@ -516,9 +514,10 @@ class Livefiles extends ReadyResource {
                     .btn:hover {
                         background-color: #101630;
                     }
-                        .download--btn{
-                        width: fit-content;
-                        }
+                       .download--btn {  
+                       width: fit-content;   
+                       }  
+
                         .download--btn a {
                         background-color: #1a244f;
                         padding: 10px;
@@ -533,6 +532,9 @@ class Livefiles extends ReadyResource {
                         }
                         .file--name{
                         padding: 0.4rem 1rem;
+                            display: flex;
+    gap: 8px;
+    align-items: center;
                         }
                         .file--name a{
                         text-decoration: none;
@@ -551,35 +553,39 @@ class Livefiles extends ReadyResource {
                         border: 0.5px solid #bbb;
                         }
                         input{
-                        padding: 0.8rem 1rem;
-                        border-radius: 7px;
-                        border: 0.5px solid #bbb;
-                        outline: none;
+                         padding: 0.4rem 0.4rem;
+    border-radius: 7px;
+    border: 0.5px solid #bbb;
+    outline: none;
+    cursor: pointer;
+    color: #777;
+    font-weight: 700;
                         }
                         form div{
-                        width: 340px;
                         display: flex;
                         flex-direction: column;
                         }
                         form select{
-                        padding: 0.8rem 1rem;
-                        border-radius: 7px;
-                        border: 0.5px solid #bbb;
-                        outline: none;
-                        cursor: pointer;
-                        color: #777;
+                            padding: 0.4rem 0.4rem;
+    border-radius: 7px;
+    border: 0.5px solid #bbb;
+    outline: none;
+    cursor: pointer;
+    color: #777;
+    font-weight: 700;
                         }
                         form label{
                         color: #555;
                         font-size: 14px;
                         font-weight: 700;
-                        padding: 2px 10px;
+                        padding: 2px 4px;
                         }
                         form .btn{ 
                         width: 100%;
-                        margin-top: 0rem;
                         border-radius: 7px;
                         padding: 0.6rem 0;
+                        font-size: 12px;
+                        font-weight: 700;
                         }
                         footer{
                         display: flex;
@@ -590,6 +596,7 @@ class Livefiles extends ReadyResource {
                         @media screen and (max-width: 650px){
                          nav{
                          padding: 0 1rem;
+                         margin: 2rem 0;
                          justify-content: start;
                         }
                         nav p{
