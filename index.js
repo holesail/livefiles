@@ -341,7 +341,7 @@ class Livefiles extends ReadyResource {
               size = this.formatBytes(stats.size)
             }
 
-            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="download--btn">${downloadButton}</td><td>${size}</td></tr>`
+            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="size">${size}</td><td class="download--btn">${downloadButton}</td></tr>`
           } catch {
             return null // Skip if not readable
           }
@@ -428,14 +428,19 @@ class Livefiles extends ReadyResource {
                         color: #333;
                         font-size: 16px;
                     }
+                    .size {
+                    font-size: 12px;
+                    font-weight: 300;
+                    }
                     .download-buttons{ 
                     display: flex;
                     flex-direction: row;
+                    flex-wrap: wrap;
                     gap: 10px;
                     }
                         .open--btn{
-                        padding: 8px 14px;
-                        font-size: 16px;
+                        padding: 8px;
+                        font-size: 12px;
                         background: #fff !important;
                         border: 1px solid #242424;
                         color: #000 !important;
@@ -491,7 +496,7 @@ class Livefiles extends ReadyResource {
         border-bottom-right-radius: 15px;
     }
                         th:nth-child(1){
-                    padding: 0.5rem 2rem;
+                    padding: 0.5rem 1rem;
                         }
                     tr:hover {
                         background-color: #f3f3f3;
@@ -512,8 +517,7 @@ class Livefiles extends ReadyResource {
                         background-color: #101630;
                     }
                         .download--btn{
-                        width: 120px;
-                        padding-inline: 12px
+                        width: fit-content;
                         }
                         .download--btn a {
                         background-color: #1a244f;
@@ -525,10 +529,10 @@ class Livefiles extends ReadyResource {
                         width: 80px !important;
                         align-items: center;
                         gap: 4px;
+                        font-size: 12px;
                         }
                         .file--name{
-                        padding: 4px 14px;
-                        margin: 0.5rem 0;
+                        padding: 0.4rem 1rem;
                         }
                         .file--name a{
                         text-decoration: none;
@@ -586,7 +590,7 @@ class Livefiles extends ReadyResource {
                         @media screen and (max-width: 650px){
                          nav{
                          padding: 0 1rem;
-                        justify-content: start;
+                         justify-content: start;
                         }
                         nav p{
                         font-size: 1.4rem;
@@ -631,9 +635,8 @@ class Livefiles extends ReadyResource {
                     <table>
                         <tr>
                             <th>Name</th>
-                            <th>Actions</th>
                             <th>Size</th>
-
+                            <th>Actions</th>
                         </tr>
                         ${directoryList}
                     </table>

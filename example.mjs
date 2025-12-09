@@ -10,4 +10,4 @@ const filemanager = new Livefiles({
 })
 
 await filemanager.ready()
-await filemanager.close()
+// await filemanager.close()
