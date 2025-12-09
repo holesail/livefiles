@@ -174,7 +174,7 @@ class Livefiles extends ReadyResource {
             res.end('Directory not accessible');
           }
         } else {
-          await this.listDirectory(fullPath, urlPath, res);
+          await this.listDirectory(fullPath, urlPath, res, req);
         }
       } else if (stats.isFile()) {
         this.serveFile(fullPath, req, res);
@@ -296,68 +296,103 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  async listDirectory (fullPath, urlPath, res) {
+
+  async listDirectory(fullPath, urlPath, res, req) {
     try {
-      const files = await readdir(fullPath, { withFileTypes: true })
+      const files = await readdir(fullPath, { withFileTypes: true });
 
-      // Separate and sort directories and files
-      const folders = files.filter(file => file.isDirectory())
-      const normalFiles = files.filter(file => !file.isDirectory())
-      const allFiles = [...folders, ...normalFiles]
+      // Get sort parameters from URL
+      const urlObj = new URL(req.url, `http://${req.headers.host}`);
+      const sortBy = urlObj.searchParams.get('sort') || 'type';
+      const sortOrder = urlObj.searchParams.get('order') || 'asc';
 
-      // Process files in batches to avoid blocking
-      const directoryItems = []
+      // Process files and gather their information
+      const fileItems = await Promise.all(files.map(async (file) => {
+        try {
+          const filePath = path.join(fullPath, file.name);
+          const stats = await stat(filePath);
 
-      for (let i = 0; i < allFiles.length; i += 5) {
-        const batch = allFiles.slice(i, i + 5)
-
-        const batchResults = await Promise.all(batch.map(async (file) => {
-          try {
-            // Check if file is readable
-            await access(path.join(fullPath, file.name), fs.constants.R_OK)
-
-            const filePath = path.join(urlPath, file.name)
-            const safeFileName = this.escapeHtml(file.name)
-            const iconHtml = file.isDirectory()
-              ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
-              : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
-
-            const downloadButton = file.isDirectory()
-              ? `<div class="download-buttons">
-              <a class="open--btn" href="${filePath}">Enter</a>
-              <a class="download--btn" href="${filePath}?download=zip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <g id="Interface / Download"> <path id="Vector" d="M6 21H18M12 3V17M12 17L17 12M12 17L7 12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> </g> </g></svg>.zip</a>
-              </div>
-              `
-              : `<a href="${filePath}" download>Download</a>`
-
-            // Get file or folder size (optimized)
-            let size
-            if (file.isDirectory()) {
-              // For directories, calculate size asynchronously
-              const dirSize = await this.calculateDirectorySize(path.join(fullPath, file.name))
-              size = this.formatBytes(dirSize)
-            } else {
-              const stats = await stat(path.join(fullPath, file.name))
-              size = this.formatBytes(stats.size)
-            }
-
-            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="size"><p>${size}</p></td><td class="download--btn">${downloadButton}</td></tr>`
-          } catch {
-            return null // Skip if not readable
-          }
-        }))
-
-        directoryItems.push(...batchResults.filter(item => item !== null))
-
-        // Yield control to event loop between batches
-        if (i + 5 < allFiles.length) {
-          await new Promise(resolve => setImmediate(resolve))
+          return {
+            name: file.name,
+            isDirectory: file.isDirectory(),
+            size: file.isDirectory() ?
+                await this.calculateDirectorySize(filePath) :
+                stats.size,
+            mtime: stats.mtime,
+            type: this.getFileType(file.name),
+            displayPath: path.join(urlPath, file.name)
+          };
+        } catch (error) {
+          return null;
         }
-      }
+      }));
 
-      const directoryList = directoryItems.join('')
+      // Filter out null entries (inaccessible files)
+      const validFiles = fileItems.filter(item => item !== null);
 
-      let createFormHtml = ''
+      // Sort the files
+      validFiles.sort((a, b) => {
+        const direction = sortOrder === 'desc' ? -1 : 1;
+
+        switch (sortBy) {
+          case 'name':
+            return direction * a.name.localeCompare(b.name);
+          case 'size':
+            return direction * (a.size - b.size);
+          case 'date':
+            return direction * (a.mtime - b.mtime);
+          case 'type':
+            // Always keep directories first
+            if (a.isDirectory !== b.isDirectory) {
+              return a.isDirectory ? -1 : 1;
+            }
+            return direction * a.type.localeCompare(b.type);
+          default:
+            return 0;
+        }
+      });
+
+      // Generate HTML for file list
+      const fileRows = validFiles.map(file => {
+        const icon = file.isDirectory ?
+            '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' :
+            '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>';
+
+        const downloadButton = file.isDirectory ?
+            `<div class="download-buttons">
+           <a class="open--btn" href="${file.displayPath}">Enter</a>
+           <a class="download--btn" href="${file.displayPath}?download=zip">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+               <path d="M6 21H18M12 3V17M12 17L17 12M12 17L7 12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+             </svg>.zip
+           </a>
+         </div>` :
+            `<a href="${file.displayPath}" download>Download</a>`;
+
+        return `
+        <tr>
+          <td class="file--name">${icon}<a href="${file.displayPath}">${this.escapeHtml(file.name)}</a></td>
+          <td class="size"><p>${this.formatBytes(file.size)}</p></td>
+          <td class="download--btn">${downloadButton}</td>
+        </tr>`;
+      }).join('');
+
+      // Add sorting controls
+      const sortingControls = `
+      <div class="sorting-controls">
+        <button id="reverseBtn" onclick="reverseList()" class="sort-order-btn">
+        <svg width="24px" height="24px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M16 18L16 6M16 6L20 10.125M16 6L12 10.125" stroke="#131b3a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path> <path d="M8 6L8 18M8 18L12 13.875M8 18L4 13.875" stroke="#131b3a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path> </g></svg>
+        </button>
+        <select id="sortBy" onchange="updateSort()">
+          <option value="type" ${sortBy === 'type' ? 'selected' : ''}>Type</option>
+          <option value="name" ${sortBy === 'name' ? 'selected' : ''}>Name</option>
+          <option value="size" ${sortBy === 'size' ? 'selected' : ''}>Size</option>
+          <option value="date" ${sortBy === 'date' ? 'selected' : ''}>Date Modified</option>
+        </select>
+      </div>
+    `;
+
+      let createFormHtml = '';
       if (this.role === 'admin') {
         createFormHtml = `
     <form method="POST" action="${urlPath}">
@@ -380,300 +415,373 @@ class Livefiles extends ReadyResource {
             </select>
         </div>
         <button class="btn" type="submit">Create</button>
-    </form>`
+    </form>`;
       }
 
-      const htmlResponse = `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>Directory Listing | Filemanager</title>
-                    <style>
-                    * {
-                    padding: 0;
-                    margin: 0;
-                    box-sizing: border-box;
-                    }
-                        body {
-                        font-family: "Intern", sans-serif;
-                        background-color: #f3f3f3;
-                        margin: 0;
-                        padding: 0;
-                        color: #333;
-                    }
-                        .go--back--btn{
-                        text-decoration: none;
-                        color: #444;
-                        cursor: pointer;
-                        display: flex;
-                        flex-direction: row;
-                        align-items: center; 
-                        margin: 1rem 2rem 1rem 2rem;
-                        }
-                        nav{
-                        display:flex;
-                        align-items: center;
-                        justify-content: start;
-                        gap: 10px;
-                        margin: 2rem;
-                        }
-                        nav p{
-                        font-size: 3.4rem;
-                        font-weight: 700;
-                        }
-                        .nav--icon{
-                        width: 60px;
-                        }
-                    h1 {
-                        color: #444;
-                        font-size: 24px;
-                        padding: 0 2rem;
-                    }
-                    a {
-                        color: #333;
-                        font-size: 16px;
-                    }
-                    .size {
-                    font-size: 12px;
-                    font-weight: 300;
-                    }
-                    .download-buttons{ 
-                    display: flex;
-                    flex-direction: row;
-                    flex-wrap: wrap;
-                    gap: 4px;
-                    }
-                        .open--btn{
-                        padding: 8px;
-                        font-size: 12px;
-                        background: #fff !important;
-                        border: 1px solid #242424;
-                        color: #000 !important;
 
-                        }
-                       .container{
+      // Update the HTML template
+      const htmlResponse = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Directory Listing | Filemanager</title>
+<style>
+* {
+    padding: 0;
+    margin: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: "Intern", sans-serif;
+    background-color: #f3f3f3;
+    margin: 0;
+    padding: 0;
+    color: #333;
+}
+.sort-order-btn {
+border: 0;
+background: transparent;
+cursor: pointer;
+}
+.go--back--btn {
+    text-decoration: none;
+    color: #444;
+    cursor: pointer;
+    display: flex;
+    flex-direction: row;
+    align-items: center; 
+    margin: 1rem 2rem 1rem 2rem;
+}
+nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 4rem 0;
+}
+nav p {
+    font-size: 3.4rem;
+    font-weight: 700;
+}
+.nav--icon {
+    width: 60px;
+}
+h1 {
+    color: #444;
+    font-size: 24px;
+    padding: 0 2rem;
+}
+a {
+    color: #333;
+    font-size: 16px;
+}
+.size {
+    font-size: 12px;
+    font-weight: 300;
+}
+.download-buttons { 
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.open--btn {
+    padding: 8px;
+    font-size: 12px;
+    background: #fff !important;
+    border: 1px solid #242424;
+    color: #000 !important;
+}
+.container {
     padding: 0 2rem 2rem 2rem; 
-                       }
-                   table {
-                   border-spacing: 0 4px;
+}
+table {
+    border-spacing: 0 4px;
     width: 100%;
     max-width: 100%;
     border-collapse: separate;
     border-radius: 15px;
     background-color: #fff;
 }
-    .table--container{
+.table--container {
     border: 0.5px solid #bbb;
     border-radius: 15px;
-    }
-                    td {
-                        text-align: left;
-                        font-weight: 700;
-                    }
-                    th {
-                    text-align: left;
-                        border-bottom: 0.5px solid #bbb;
-                        font-weight: 300;
-                        font-size: 14px;
-                        background-color: #fff;
-                    }
-                          table tr:first-child th:first-child {
-        border-top-left-radius: 15px;
-    }
-
-    table tr:first-child th:last-child {
-        border-top-right-radius: 15px;
-    }
-
-    table tr:last-child td:first-child {
-        border-bottom-left-radius: 15px;
-    }
-
-    table tr:last-child td:last-child {
-        border-bottom-right-radius: 15px;
-    }
-                        th:nth-child(1){
-                    padding: 0.5rem 1rem;
-                        }
-                    tr:hover {
-                        background-color: #f3f3f3;
-                    }
-                    .btn {
-                        background-color: #1a244f;
-                        border: none;
-                        color: #fff;
-                        padding: 8px 14px;
-                        text-align: center;
-                        text-decoration: none;
-                        display: inline-block;
-                        font-size: 18px;
-                        cursor: pointer;
-                        border-radius: 4px;
-                    }
-                    .btn:hover {
-                        background-color: #101630;
-                    }
-                       .download--btn {  
-                       width: fit-content;   
-                       }  
-
-                        .download--btn a {
-                        background-color: #1a244f;
-                        padding: 10px;
-                        border-radius: 7px;
-                        text-decoration: none;
-                        color: #fff;
-                        display: flex;
-                        width: 80px !important;
-                        align-items: center;
-                        gap: 4px;
-                        font-size: 12px;
-                        }
-                        .file--name{
-                        padding: 0.4rem 1rem;
-                            display: flex;
+}
+td {
+    text-align: left;
+    font-weight: 700;
+}
+th {
+    text-align: left;
+    border-bottom: 0.5px solid #bbb;
+    font-weight: 300;
+    font-size: 14px;
+    background-color: #fff;
+}
+table tr:first-child th:first-child {
+    border-top-left-radius: 15px;
+}
+table tr:first-child th:last-child {
+    border-top-right-radius: 15px;
+}
+table tr:last-child td:first-child {
+    border-bottom-left-radius: 15px;
+}
+table tr:last-child td:last-child {
+    border-bottom-right-radius: 15px;
+}
+th:nth-child(1) {
+    padding: 0.5rem 1rem;
+}
+tr:hover {
+    background-color: #f3f3f3;
+}
+.btn {
+    background-color: #1a244f;
+    border: none;
+    color: #fff;
+    padding: 8px 14px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 18px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+.btn:hover {
+    background-color: #101630;
+}
+.download--btn {  
+    width: fit-content;   
+}  
+.download--btn a {
+    background-color: #1a244f;
+    padding: 10px;
+    border-radius: 7px;
+    text-decoration: none;
+    color: #fff;
+    display: flex;
+    width: 80px !important;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+}
+.file--name {
+    padding: 0.4rem 1rem;
+    display: flex;
     gap: 8px;
     align-items: center;
-                        }
-                        .file--name a{
-                        text-decoration: none;
-                        color: #555;
-                        }
+}
+.file--name a {
+    text-decoration: none;
+    color: #555;
+}
+form {
+    padding: 1rem 1rem;
+    border-radius: 15px;
+    width: 340px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    background: #fff;
+    margin: 1rem 0 3rem 0;
+    border: 0.5px solid #bbb;
+}
+input {
+    padding: 0.4rem 0.4rem;
+    border-radius: 7px;
+    border: 0.5px solid #bbb;
+    outline: none;
+    cursor: pointer;
+    color: #777;
+    font-weight: 700;
+}
+form div {
+    display: flex;
+    flex-direction: column;
+}
+form select {
+    padding: 0.4rem 0.4rem;
+    border-radius: 7px;
+    border: 0.5px solid #bbb;
+    outline: none;
+    cursor: pointer;
+    color: #777;
+    font-weight: 700;
+}
+form label {
+    color: #555;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 2px 4px;
+}
+form .btn { 
+    width: 100%;
+    border-radius: 7px;
+    padding: 0.6rem 0;
+    font-size: 12px;
+    font-weight: 700;
+}
+footer {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-bottom: 2rem;
+}
 
-                        form {
-                        padding: 1rem 1rem;
-                        border-radius: 15px;
-                        width: 340px;
-                        display: flex;
-                        flex-direction: column;
-                        gap: 1rem;
-                        background: #fff;
-                        margin: 1rem 0 3rem 0;
-                        border: 0.5px solid #bbb;
-                        }
-                        input{
-                         padding: 0.4rem 0.4rem;
+/* New styles for sorting controls */
+.sorting-controls {
+    margin: 1rem 2rem;
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+.sorting-controls select {
+    padding: 0.4rem 0.4rem;
     border-radius: 7px;
     border: 0.5px solid #bbb;
     outline: none;
     cursor: pointer;
     color: #777;
     font-weight: 700;
-                        }
-                        form div{
-                        display: flex;
-                        flex-direction: column;
-                        }
-                        form select{
-                            padding: 0.4rem 0.4rem;
-    border-radius: 7px;
-    border: 0.5px solid #bbb;
-    outline: none;
-    cursor: pointer;
-    color: #777;
-    font-weight: 700;
-                        }
-                        form label{
-                        color: #555;
-                        font-size: 14px;
-                        font-weight: 700;
-                        padding: 2px 4px;
-                        }
-                        form .btn{ 
-                        width: 100%;
-                        border-radius: 7px;
-                        padding: 0.6rem 0;
-                        font-size: 12px;
-                        font-weight: 700;
-                        }
-                        footer{
-                        display: flex;
-                        gap: 1rem;
-                        justify-content: center;
-                        margin-bottom: 2rem;
-                        }
-                        @media screen and (max-width: 650px){
-                         nav{
-                         padding: 0 1rem;
-                         margin: 2rem 0;
-                         justify-content: start;
-                        }
-                        nav p{
-                        font-size: 1.4rem;
-                        font-weight: 700;
-                        }
-                        h1{
-                        padding: 0 1rem;
-                        margin-block: 0;
-                        }
-                        .go--back--btn{
-                        margin: 1rem;
-                        }
-                        .container{
-                        padding: 0 1rem;
-                        }
-                        .nav--icon{
-                        width: 30px;
-                        }
-                        form{
-                        width: -webkit-fill-available;
-                        }
-                        form div, form button{
-                        width: 100%;
-                        }
-                         footer{
-                        justify-content: flex-start;
-                        padding: 0 1.4rem;
-                        gap: 10px;
-                        }
-                        }
-                    </style>
-                </head>
-                <body>
-                <nav>
-                <img class="nav--icon" src="${base64Logo}"></img>
-                <p>livefiles</p>
-                </nav>
-                <h1>Folder and Files: ${this.escapeHtml(urlPath)}</h1>
-                <p class="go--back--btn" onclick="goback()">go back</p>
-                    <div class="container">
-                   <div class="table--container">
-                    <table>
-                        <tr>
-                            <th>Name</th>
-                            <th>Size</th>
-                            <th>Actions</th>
-                        </tr>
-                        ${directoryList}
-                    </table>
-                   </div>
-                    ${createFormHtml}
-                    </div>
-                    <footer>
-                    <a>Discord</a>
-                   &#183;
-                    <a>Support</a>
-                    &#183;
-                    <a>&copy; 2024 Holesail</a>
-                    </footer>
-                </body>
-                <script>
-                function goback(){
-                window.history.back();
-                }
-                </script>
-                </html>
-            `
-      res.writeHead(200, { 'Content-Type': 'text/html' })
-      res.end(htmlResponse)
+    min-width: 120px;
+    background-color: #fff;
+}
+
+@media screen and (max-width: 650px) {
+    nav {
+        padding: 0 1rem;
+        margin: 2rem 0;
+        justify-content: start;
+    }
+    nav p {
+        font-size: 1.4rem;
+        font-weight: 700;
+    }
+    h1 {
+        padding: 0 1rem;
+        margin-block: 0;
+    }
+    .go--back--btn {
+        margin: 1rem;
+    }
+    .container {
+        padding: 0 1rem;
+    }
+    .nav--icon {
+        width: 30px;
+    }
+    form {
+        width: -webkit-fill-available;
+    }
+    form div, form button {
+        width: 100%;
+    }
+    footer {
+        justify-content: flex-start;
+        padding: 0 1.4rem;
+        gap: 10px;
+    }
+    .sorting-controls {
+        margin: 1rem;
+        flex-wrap: wrap;
+    }
+    .sorting-controls select {
+        flex: 1;
+        min-width: fit-content;
+    }
+}
+</style>
+        </head>
+        <body>
+          <nav>
+            <img class="nav--icon" src="${base64Logo}"></img>
+            <p>livefiles</p>
+          </nav>
+          <h1>Folder and Files: ${this.escapeHtml(urlPath)}</h1>
+          <div style="display: flex; flex-direction: row; justify-content: space-between; align-items: center;">
+          <p class="go--back--btn" onclick="goback()">go back</p>
+          ${sortingControls}
+          </div>
+          <div class="container">
+            <div class="table--container">
+              <table>
+                <tr>
+                  <th>Name</th>
+                  <th>Size</th>
+                  <th>Actions</th>
+                </tr>
+                ${fileRows}
+              </table>
+            </div>
+            ${createFormHtml}
+          </div>
+          <script>
+          function reverseList() {
+              const table = document.querySelector('table');
+              const rows = Array.from(table.rows).slice(1);
+              rows.reverse()
+              
+              while (table.rows.length > 1) {
+                  table.deleteRow(1);
+              }
+              rows.forEach(row => {
+                  table.appendChild(row);
+              });
+          }
+            function updateSort() {
+              const sortBy = document.getElementById('sortBy').value;
+              const url = new URL(window.location.href);
+              url.searchParams.set('sort', sortBy);
+              window.location.href = url.toString();
+          }
+          
+            function goback() {
+              window.history.back();
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(htmlResponse);
+
     } catch (err) {
-      this.logger.log({ type: 3, msg: `Error listing directory: ${err.message}` })
-      res.writeHead(500, { 'Content-Type': 'text/plain' })
-      res.end('Internal Server Error')
+      this.logger.log({ type: 3, msg: `Error listing directory: ${err.message}` });
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal Server Error');
     }
   }
 
+// Helper method to determine file type
+  getFileType(filename) {
+    const ext = path.extname(filename).toLowerCase();
+
+    const typeMap = {
+      // Images
+      '.jpg': 'image', '.jpeg': 'image', '.png': 'image',
+      '.gif': 'image', '.svg': 'image', '.webp': 'image',
+      // Documents
+      '.pdf': 'document', '.doc': 'document', '.docx': 'document',
+      '.txt': 'document', '.md': 'document', '.csv': 'document',
+      // Video
+      '.mp4': 'video', '.avi': 'video', '.mov': 'video',
+      '.wmv': 'video', '.webm': 'video', '.mkv': 'video',
+      // Audio
+      '.mp3': 'audio', '.wav': 'audio', '.ogg': 'audio',
+      '.m4a': 'audio', '.flac': 'audio',
+      // Archives
+      '.zip': 'archive', '.rar': 'archive', '.7z': 'archive',
+      '.tar': 'archive', '.gz': 'archive',
+      // Code
+      '.js': 'code', '.py': 'code', '.java': 'code',
+      '.html': 'code', '.css': 'code', '.php': 'code'
+    };
+
+    return typeMap[ext] || 'other';
+  }
   formatBytes (bytes, decimals = 2) {
     if (bytes === 0) return '0 Bytes'
     const k = 1024
