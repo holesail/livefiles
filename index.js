@@ -4,6 +4,7 @@ const path = require('path')
 const qs = require('querystring')
 const ReadyResource = require('ready-resource')
 const { promisify } = require('util')
+const archiver = require('archiver')
 
 const { base64Logo } = require('./logo.js')
 
@@ -49,6 +50,57 @@ class Livefiles extends ReadyResource {
     this.streamBufferSize = opts.streamBufferSize || 64 * 1024 // 64KB chunks
   }
 
+  async createZipArchive(dirPath, outputStream) {
+    return new Promise((resolve, reject) => {
+      try {
+        const archive = archiver('zip', {
+          zlib: { level: 5 }
+        });
+
+        archive.on('error', err => {
+          this.logger.log({ type: 3, msg: `Archive error: ${err.message}` });
+          reject(err);
+        });
+
+        archive.on('warning', err => {
+          if (err.code === 'ENOENT') {
+            this.logger.log({ type: 2, msg: `Archive warning: ${err.message}` });
+          } else {
+            this.logger.log({ type: 3, msg: `Archive warning: ${err.message}` });
+            reject(err);
+          }
+        });
+
+        archive.on('end', () => {
+          this.logger.log({ type: 1, msg: `Archive created for: ${dirPath}` });
+          resolve();
+        });
+
+        outputStream.on('error', err => {
+          this.logger.log({ type: 3, msg: `Output stream error: ${err.message}` });
+          reject(err);
+        });
+
+        archive.pipe(outputStream);
+
+        archive.directory(dirPath, false, (entryData) => {
+          try {
+            fs.accessSync(path.join(dirPath, entryData.name), fs.constants.R_OK);
+            return entryData;
+          } catch (err) {
+            this.logger.log({ type: 2, msg: `Skipping inaccessible file: ${entryData.name}` });
+            return false;
+          }
+        });
+
+        archive.finalize();
+      } catch (err) {
+        this.logger.log({ type: 3, msg: `Error in createZipArchive: ${err.message}` });
+        reject(err);
+      }
+    });
+  }
+
   async _open () {
     // initialise local http server
     this.server = http.createServer(this.handleRequest.bind(this))
@@ -69,7 +121,9 @@ class Livefiles extends ReadyResource {
   }
 
   handleRequest (req, res) {
-    const urlPath = decodeURIComponent(req.url)
+    // Strip query string for filesystem path
+    const [rawPath] = req.url.split('?')
+    const urlPath = decodeURIComponent(rawPath || '/')
     const fullPath = path.join(this.path, urlPath)
 
     // Basic authentication check
@@ -83,8 +137,12 @@ class Livefiles extends ReadyResource {
       this.handleGetRequest(fullPath, urlPath, res, req)
     } else if (req.method === 'POST') {
       this.handlePostRequest(req, res, urlPath)
+    } else {
+      res.writeHead(405, { 'Content-Type': 'text/plain' })
+      res.end('Method Not Allowed')
     }
   }
+
 
   authenticate (req) {
     const authHeader = req.headers.authorization
@@ -99,26 +157,42 @@ class Livefiles extends ReadyResource {
     return false
   }
 
-  async handleGetRequest (fullPath, urlPath, res, req) {
+  async handleGetRequest(fullPath, urlPath, res, req) {
     try {
-      const stats = await stat(fullPath)
+      const stats = await stat(fullPath);
+      const cleanUrl = req.url.split('?')[0];
+      const isZipDownload = req.url.includes('?download=zip');
 
       if (stats.isDirectory()) {
-        await this.listDirectory(fullPath, urlPath, res)
+        if (isZipDownload) {
+          try {
+            await access(fullPath, fs.constants.R_OK);
+            this.serveFile(fullPath, req, res, true);
+          } catch (err) {
+            this.logger.log({ type: 3, msg: `Access error for zip download: ${err.message}` });
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('Directory not accessible');
+          }
+        } else {
+          await this.listDirectory(fullPath, urlPath, res);
+        }
       } else if (stats.isFile()) {
-        this.serveFile(fullPath, req, res)
+        this.serveFile(fullPath, req, res);
       }
     } catch (err) {
       if (err.code === 'ENOENT') {
-        res.writeHead(404, { 'Content-Type': 'text/plain' })
-        res.end('File Not Found')
+        this.logger.log({ type: 3, msg: `File not found: ${fullPath}` });
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('File Not Found');
       } else {
-        this.logger.log({ type: 3, msg: `Error handling GET request: ${err.message}` })
-        res.writeHead(500, { 'Content-Type': 'text/plain' })
-        res.end('Internal Server Error')
+        this.logger.log({ type: 3, msg: `Error handling GET request: ${err.message}` });
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Internal Server Error');
       }
     }
   }
+
+
 
   handlePostRequest (req, res, urlPath) {
     let body = ''
@@ -245,11 +319,15 @@ class Livefiles extends ReadyResource {
             const filePath = path.join(urlPath, file.name)
             const safeFileName = this.escapeHtml(file.name)
             const iconHtml = file.isDirectory()
-              ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4042bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
-              : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E94E47" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
+              ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
+              : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
 
             const downloadButton = file.isDirectory()
-              ? `<a class="open--btn" href="${filePath}">Enter</a>`
+              ? `<div class="download-buttons">
+              <a class="open--btn" href="${filePath}">Enter</a>
+              <a class="download--btn" href="${filePath}?download=zip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <g id="Interface / Download"> <path id="Vector" d="M6 21H18M12 3V17M12 17L17 12M12 17L7 12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> </g> </g></svg>.zip</a>
+              </div>
+              `
               : `<a href="${filePath}" download>Download</a>`
 
             // Get file or folder size (optimized)
@@ -339,7 +417,7 @@ class Livefiles extends ReadyResource {
                         font-weight: 700;
                         }
                         .nav--icon{
-                        width: 60px;
+                        width: 80px;
                         }
                     h1 {
                         color: #444;
@@ -349,6 +427,11 @@ class Livefiles extends ReadyResource {
                     a {
                         color: #333;
                         font-size: 16px;
+                    }
+                    .download-buttons{ 
+                    display: flex;
+                    flex-direction: row;
+                    gap: 10px;
                     }
                         .open--btn{
                         padding: 8px 14px;
@@ -414,7 +497,7 @@ class Livefiles extends ReadyResource {
                         background-color: #f3f3f3;
                     }
                     .btn {
-                        background-color: #E94E47;
+                        background-color: #1a244f;
                         border: none;
                         color: #fff;
                         padding: 8px 14px;
@@ -426,19 +509,22 @@ class Livefiles extends ReadyResource {
                         border-radius: 4px;
                     }
                     .btn:hover {
-                        background-color: #ca271f;
+                        background-color: #101630;
                     }
                         .download--btn{
                         width: 120px;
+                        padding-inline: 12px
                         }
                         .download--btn a {
-                        background-color: #E94E47;
+                        background-color: #1a244f;
                         padding: 10px;
                         border-radius: 7px;
                         text-decoration: none;
                         color: #fff;
                         display: flex;
                         width: 80px !important;
+                        align-items: center;
+                        gap: 4px;
                         }
                         .file--name{
                         padding: 4px 14px;
@@ -587,7 +673,31 @@ class Livefiles extends ReadyResource {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i]
   }
 
-  serveFile (fullPath, req, res) {
+  serveFile (fullPath, req, res, isZip = false) {
+    if (isZip) {
+      try {
+        const dirName = path.basename(fullPath);
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="${dirName}.zip"`
+        });
+
+        this.createZipArchive(fullPath, res)
+            .catch(err => {
+              this.logger.log({ type: 3, msg: `Error creating zip: ${err.message}` });
+              if (!res.headersSent) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end('Error creating zip archive');
+              }
+            });
+        return;
+      } catch (err) {
+        this.logger.log({ type: 3, msg: `Error in zip creation: ${err.message}` });
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error creating zip archive');
+        return;
+      }
+    }
     const extension = path.extname(fullPath).toLowerCase()
     const contentType =
       this.getContentType(extension) || 'application/octet-stream'
