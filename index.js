@@ -245,8 +245,8 @@ class Livefiles extends ReadyResource {
             const filePath = path.join(urlPath, file.name)
             const safeFileName = this.escapeHtml(file.name)
             const iconHtml = file.isDirectory()
-              ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4042bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
-              : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E94E47" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
+              ? '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4042bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
+              : '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
 
             const downloadButton = file.isDirectory()
               ? `<a class="open--btn" href="${filePath}">Enter</a>`
@@ -256,14 +256,14 @@ class Livefiles extends ReadyResource {
             let size
             if (file.isDirectory()) {
               // For directories, calculate size asynchronously
-              const dirSize = await this.calculateDirectorySize(path.join(fullPath, file.name))
-              size = this.formatBytes(dirSize)
+              // const dirSize = await this.calculateDirectorySize(path.join(fullPath, file.name))
+              size = ''
             } else {
               const stats = await stat(path.join(fullPath, file.name))
               size = this.formatBytes(stats.size)
             }
 
-            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="download--btn">${downloadButton}</td><td>${size}</td></tr>`
+            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="download--btn">${downloadButton}</td><td><p class="size">${size}</p></td></tr>`
           } catch {
             return null // Skip if not readable
           }
@@ -312,27 +312,33 @@ class Livefiles extends ReadyResource {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <title>Directory Listing | Filemanager</title>
                     <style>
+                    *{
+                    padding: 0;
+                    margin: 0;
+                    box-sizing: border-box;
+                    }
                         body {
                         font-family: "Intern", sans-serif;
                         background-color: #f3f3f3;
-                        margin: 0;
-                        padding: 0;
+                        margin: 1rem 2rem 1rem 2rem;
                         color: #333;
                     }
                         .go--back--btn{
+                        width: fit-content;
                         text-decoration: none;
                         color: #444;
                         cursor: pointer;
                         display: flex;
                         flex-direction: row;
                         align-items: center; 
-                        margin: 2rem 2rem 1rem 2rem;
+                        margin: 1rem 2rem 1rem 2rem;
                         }
                         nav{
                         display:flex;
                         align-items: center;
                         justify-content: center;
                         gap: 10px;
+                        margin: 2rem;
                         }
                         nav p{
                         font-size: 3.4rem;
@@ -343,18 +349,28 @@ class Livefiles extends ReadyResource {
                         }
                     h1 {
                         color: #444;
-                        font-size: 24px;
-                        padding: 0 2rem;
+                        font-size: 20px;
+                        padding: 0 0 0 2rem;
                     }
                     a {
                         color: #333;
                         font-size: 16px;
                     }
+                    .size {
+                    font-size: 12px;
+                    font-weight: 300;
+                    }
+                    .download-buttons{ 
+                    display: flex;
+                    flex-direction: row;
+                    flex-wrap: wrap;
+                    gap: 4px;
+                    }
                         .open--btn{
                         padding: 8px 14px;
                         font-size: 16px;
                         background: #fff !important;
-                        border: 1px solid #242424;
+                        border: 1px solid #bbb;
                         color: #000 !important;
 
                         }
@@ -367,6 +383,7 @@ class Livefiles extends ReadyResource {
     border-collapse: collapse;
     border-radius: 15px;
     background-color: #fff;
+    overflow: hidden;
 }
     .table--container{
     border: 0.5px solid #bbb;
@@ -377,16 +394,8 @@ class Livefiles extends ReadyResource {
                         text-align: left;
                         font-weight: 700;
                     }
-                        td:nth-child(odd){
-                        display: flex;
-                        align-items: center;
-                        gap: 10px;
-                        }
-                        td:nth-child(odd) a{
-                        width: 100%;
-                        }
                     th {
-                    text-align: left;
+                        text-align: left;
                         border-bottom: 0.5px solid #bbb;
                         font-weight: 300;
                         font-size: 14px;
@@ -407,46 +416,57 @@ class Livefiles extends ReadyResource {
     table tr:last-child td:last-child {
         border-bottom-right-radius: 15px;
     }
+    tbody:nth-child(1) {
+    font-weight: 700;
+    }
                         th:nth-child(1){
-                    padding: 0.5rem 2rem;
+                    padding: 0.5rem 1rem;
                         }
                     tr:hover {
                         background-color: #f3f3f3;
                     }
                     .btn {
-                        background-color: #E94E47;
+                        background-color: #1a244f;
                         border: none;
                         color: #fff;
                         padding: 8px 14px;
                         text-align: center;
                         text-decoration: none;
                         display: inline-block;
-                        font-size: 18px;
+                        font-size: 14px;
                         cursor: pointer;
                         border-radius: 4px;
                     }
                     .btn:hover {
-                        background-color: #ca271f;
+                        background-color: #0f142c;
                     }
                         .download--btn{
-                        width: 120px;
+                        width: fit-content;
                         }
                         .download--btn a {
-                        background-color: #E94E47;
-                        padding: 10px;
-                        border-radius: 7px;
+                        background-color: #1a244f;
+                        padding: 6px;
+                        border-radius: 6px;
                         text-decoration: none;
                         color: #fff;
                         display: flex;
-                        width: 80px !important;
+                        font-size: 12px;
+                        min-width: 69px !important;
+                        width: fit-content;
+                        margin-block: 1px
                         }
+                        table tr:nth-child(even) {background-color: #fafafa;}
                         .file--name{
                         padding: 4px 14px;
-                        margin: 0.5rem 0;
+                        display: flex;
+                        gap: 6px;
+                        align-items: center;
                         }
                         .file--name a{
                         text-decoration: none;
-                        color: #555;
+                        color: #777;
+                        font-size: 14px;
+                        font-weight: 600;
                         }
 
                         form {
@@ -461,29 +481,36 @@ class Livefiles extends ReadyResource {
                         border: 0.5px solid #bbb;
                         }
                         input{
-                        padding: 0.8rem 1rem;
+                        padding: 0.4rem 0.7rem;
                         border-radius: 7px;
                         border: 0.5px solid #bbb;
                         outline: none;
+                        color: #888;
+                        font-weight: 700;
+                        }
+                        input::placeholder{
+                        color: #888;
                         }
                         form div{
-                        width: 340px;
+                        width: 100%;
                         display: flex;
                         flex-direction: column;
                         }
                         form select{
-                        padding: 0.8rem 1rem;
+                        padding: 0.4rem;
                         border-radius: 7px;
                         border: 0.5px solid #bbb;
                         outline: none;
                         cursor: pointer;
                         color: #777;
+                        font-weight: 700;
+                        width: 100%;
                         }
                         form label{
                         color: #555;
                         font-size: 14px;
                         font-weight: 700;
-                        padding: 2px 10px;
+                        padding: 2px 4px;
                         }
                         form .btn{ 
                         width: 100%;
@@ -538,7 +565,10 @@ class Livefiles extends ReadyResource {
                 <img class="nav--icon" src="${base64Logo}"></img>
                 <p>livefiles</p>
                 </nav>
-                <h1>Folder and Files: ${this.escapeHtml(urlPath)}</h1>
+                <div  style="display: flex; flex-direction: row; gap: 4px;">
+                <h1>Folder and Files: </h1>
+                <h3 id="url--path" onClick="copyToClip(this)" style="cursor:pointer;background: #ddd;font-size: 14px;font-family: monospace;padding: 4px 12px;letter-spacing: normal;border-radius: 12px;color: #777;">${this.escapeHtml(urlPath)}</h3>
+                </div>
                 <p class="go--back--btn" onclick="goback()">go back</p>
                     <div class="container">
                    <div class="table--container">
@@ -566,6 +596,23 @@ class Livefiles extends ReadyResource {
                 function goback(){
                 window.history.back();
                 }
+                function copyToClip(msg) {
+    try {
+        navigator.clipboard.writeText(msg.innerText)
+            .then(() => {
+                const originalText = msg.innerText;
+                msg.innerText = 'Copied!';
+                setTimeout(() => {
+                    msg.innerText = originalText;
+                }, 1500);
+            })
+            .catch(err => {
+                console.error('Failed to copy text:', err);
+            });
+    } catch (err) {
+        console.error('Copy to clipboard failed:', err);
+    }
+}
                 </script>
                 </html>
             `
