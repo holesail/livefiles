@@ -255,15 +255,13 @@ class Livefiles extends ReadyResource {
             // Get file or folder size (optimized)
             let size
             if (file.isDirectory()) {
-              // For directories, calculate size asynchronously
-              // const dirSize = await this.calculateDirectorySize(path.join(fullPath, file.name))
               size = ''
             } else {
               const stats = await stat(path.join(fullPath, file.name))
               size = this.formatBytes(stats.size)
             }
 
-            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="download--btn">${downloadButton}</td><td><p class="size">${size}</p></td></tr>`
+            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td><p class="size">${size}</p></td><td class="download--btn">${downloadButton}</td></tr>`
           } catch {
             return null // Skip if not readable
           }
@@ -291,7 +289,7 @@ class Livefiles extends ReadyResource {
             </select>
         </div>
         <div>
-            <label for="name">Name</label>
+            <label for="name">File Name</label>
             <input type="text" name="name" id="name" placeholder="Name of the file/folder*" required>
         </div>
         <div>
@@ -514,9 +512,10 @@ class Livefiles extends ReadyResource {
                         }
                         form .btn{ 
                         width: 100%;
-                        margin-top: 0rem;
+                        margin-top: 0;
                         border-radius: 7px;
-                        padding: 0.6rem 0;
+                        padding: 0.5rem 0;
+                        font-weight: 700;
                         }
                         footer{
                         display: flex;
@@ -525,9 +524,13 @@ class Livefiles extends ReadyResource {
                         margin-bottom: 2rem;
                         }
                         @media screen and (max-width: 650px){
+                        body {
+                        margin: 0.4rem;
+                        }
                          nav{
-                         padding: 0 1rem;
+                         padding: 0 0.4rem;
                         justify-content: start;
+                        margin: 2rem 0.4rem;
                         }
                         nav p{
                         font-size: 1.4rem;
@@ -565,7 +568,7 @@ class Livefiles extends ReadyResource {
                 <img class="nav--icon" src="${base64Logo}"></img>
                 <p>livefiles</p>
                 </nav>
-                <div  style="display: flex; flex-direction: row; gap: 4px;">
+                <div  style="display: flex; flex-direction: row; gap: 4px; flex-wrap: wrap">
                 <h1>Folder and Files: </h1>
                 <h3 id="url--path" onClick="copyToClip(this)" style="cursor:pointer;background: #ddd;font-size: 14px;font-family: monospace;padding: 4px 12px;letter-spacing: normal;border-radius: 12px;color: #777;">${this.escapeHtml(urlPath)}</h3>
                 </div>
