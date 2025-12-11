@@ -68,21 +68,22 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  handleRequest (req, res) {
-    const urlPath = decodeURIComponent(req.url)
-    const fullPath = path.join(this.path, urlPath)
+  handleRequest(req, res) {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+    const urlPath = decodeURIComponent(parsedUrl.pathname);
+    const fullPath = path.join(this.path, urlPath);
 
     // Basic authentication check
     if (!this.authenticate(req)) {
-      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Filemanager"' })
-      res.end('Authentication required.')
-      return
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Filemanager"' });
+      res.end('Authentication required.');
+      return;
     }
 
     if (req.method === 'GET') {
-      this.handleGetRequest(fullPath, urlPath, res, req)
+      this.handleGetRequest(fullPath, urlPath, res, req);
     } else if (req.method === 'POST') {
-      this.handlePostRequest(req, res, urlPath)
+      this.handlePostRequest(req, res, urlPath);
     }
   }
 
@@ -104,7 +105,7 @@ class Livefiles extends ReadyResource {
       const stats = await stat(fullPath)
 
       if (stats.isDirectory()) {
-        await this.listDirectory(fullPath, urlPath, res)
+        await this.listDirectory(fullPath, urlPath, res, req)
       } else if (stats.isFile()) {
         this.serveFile(fullPath, req, res)
       }
@@ -222,68 +223,101 @@ class Livefiles extends ReadyResource {
     }
   }
 
-  async listDirectory (fullPath, urlPath, res) {
+  async listDirectory (fullPath, urlPath, res, req) {
     try {
       const files = await readdir(fullPath, { withFileTypes: true })
 
       // Separate and sort directories and files
-      const folders = files.filter(file => file.isDirectory())
-      const normalFiles = files.filter(file => !file.isDirectory())
-      const allFiles = [...folders, ...normalFiles]
+      const urlObj = new URL(req.url, `http://${req.headers.host}`);
+      const sortBy = urlObj.searchParams.get('sort') || 'type';
+      const sortOrder = urlObj.searchParams.get('order') || 'asc';
 
-      // Process files in batches to avoid blocking
-      const directoryItems = []
+      const fileItems = await Promise.all(files.map(async (file) => {
+        try {
+          const filePath = path.join(fullPath, file.name);
+          const stats = await stat(filePath);
 
-      for (let i = 0; i < allFiles.length; i += 5) {
-        const batch = allFiles.slice(i, i + 5)
-
-        const batchResults = await Promise.all(batch.map(async (file) => {
-          try {
-            // Check if file is readable
-            await access(path.join(fullPath, file.name), fs.constants.R_OK)
-
-            const filePath = path.join(urlPath, file.name)
-            const safeFileName = this.escapeHtml(file.name)
-            const iconHtml = file.isDirectory()
-              ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4042bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
-              : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E94E47" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>'
-
-            const downloadButton = file.isDirectory()
-              ? `<a class="open--btn" href="${filePath}">Enter</a>`
-              : `<a href="${filePath}" download>Download</a>`
-
-            // Get file or folder size (optimized)
-            let size
-            if (file.isDirectory()) {
-              // For directories, calculate size asynchronously
-              const dirSize = await this.calculateDirectorySize(path.join(fullPath, file.name))
-              size = this.formatBytes(dirSize)
-            } else {
-              const stats = await stat(path.join(fullPath, file.name))
-              size = this.formatBytes(stats.size)
-            }
-
-            return `<tr><td class="file--name">${iconHtml}<a href="${filePath}">${safeFileName}</a></td><td class="download--btn">${downloadButton}</td><td>${size}</td></tr>`
-          } catch {
-            return null // Skip if not readable
-          }
-        }))
-
-        directoryItems.push(...batchResults.filter(item => item !== null))
-
-        // Yield control to event loop between batches
-        if (i + 5 < allFiles.length) {
-          await new Promise(resolve => setImmediate(resolve))
+          return {
+            name: file.name,
+            isDirectory: file.isDirectory(),
+            size: file.isDirectory() ?
+                await this.calculateDirectorySize(filePath) :
+                stats.size,
+            mtime: stats.mtime,
+            type: this.getFileType(file.name),
+            displayPath: path.join(urlPath, file.name)
+          };
+        } catch (error) {
+          return null;
         }
-      }
+      }));
 
-      const directoryList = directoryItems.join('')
+      const validFiles = fileItems.filter(item => item !== null);
 
-      let createFormHtml = ''
+
+      validFiles.sort((a, b) => {
+        const direction = sortOrder === 'desc' ? -1 : 1;
+        switch (sortBy) {
+          case 'name':
+            return direction * a.name.localeCompare(b.name);
+          case 'size':
+            return direction * (a.size - b.size);
+          case 'date':
+            return direction * (a.mtime - b.mtime);
+          case 'type':
+            if (a.isDirectory !== b.isDirectory) {
+              return a.isDirectory ? -1 : 1;
+            }
+            return direction * a.type.localeCompare(b.type);
+          default:
+            return 0;
+        }
+      });
+
+      const fileRows = validFiles.map(file => {
+        const icon = file.isDirectory ?
+            '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' :
+            '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a244f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V9l-7-7z"/><path d="M13 3v6h6"/></svg>';
+
+        const downloadButton = file.isDirectory ?
+            `<div class="download-buttons">
+           <a class="open--btn" href="${file.displayPath}">Enter</a>
+           <a class="download--btn" href="${file.displayPath}?download=zip">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+               <path d="M6 21H18M12 3V17M12 17L17 12M12 17L7 12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+             </svg>.zip
+           </a>
+         </div>` :
+            `<a href="${file.displayPath}" download>Download</a>`;
+
+        return `
+        <tr>
+          <td class="file--name">${icon}<a href="${file.displayPath}">${this.escapeHtml(file.name)}</a></td>
+          <td class="size"><p>${this.formatBytes(file.size)}</p></td>
+          <td class="download--btn">${downloadButton}</td>
+        </tr>`;
+      }).join('');
+
+      // Add sorting controls
+      const sortingControls = `
+      <div class="sorting-controls">
+        <button id="reverseBtn" onclick="reverseList()" class="sort-order-btn">
+        <svg width="20px" height="20px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M16 18L16 6M16 6L20 10.125M16 6L12 10.125" stroke="#131b3a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path> <path d="M8 6L8 18M8 18L12 13.875M8 18L4 13.875" stroke="#131b3a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path> </g></svg>
+        </button>
+        <select id="sortBy" onchange="updateSort()">
+    <option value="type" ${sortBy === 'type' ? 'selected' : ''}>Type</option>
+    <option value="name" ${sortBy === 'name' ? 'selected' : ''}>Name</option>
+    <option value="size" ${sortBy === 'size' ? 'selected' : ''}>Size</option>
+    <option value="date" ${sortBy === 'date' ? 'selected' : ''}>Date Modified</option>
+</select>
+      </div>
+    `;
+
+      let createFormHtml = '';
       if (this.role === 'admin') {
         createFormHtml = `
     <form method="POST" action="${urlPath}">
-        <div>
+      <div>
             <label for="item_type">New Item Type</label>
             <select name="item_type" id="item_type">
                 <option value="folder">Folder</option>
@@ -318,6 +352,11 @@ class Livefiles extends ReadyResource {
                         margin: 0;
                         padding: 0;
                         color: #333;
+                    }
+                    #reverseBtn {
+                    padding: 0;
+    background: transparent;
+    border: 0;;
                     }
                         .go--back--btn{
                         text-decoration: none;
@@ -497,6 +536,23 @@ class Livefiles extends ReadyResource {
                         justify-content: center;
                         margin-bottom: 2rem;
                         }
+                        .sorting-controls {
+    margin: 1rem 2rem;
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+.sorting-controls select {
+    padding: 0.4rem 0.4rem;
+    border-radius: 7px;
+    border: 0.5px solid #bbb;
+    outline: none;
+    cursor: pointer;
+    color: #777;
+    font-weight: 700;
+    min-width: 120px;
+    background-color: #fff;
+}
                         @media screen and (max-width: 650px){
                          nav{
                          padding: 0 1rem;
@@ -530,6 +586,14 @@ class Livefiles extends ReadyResource {
                         padding: 0 1.4rem;
                         gap: 10px;
                         }
+                        .sorting-controls {
+        margin: 1rem;
+        flex-wrap: wrap;
+    }
+    .sorting-controls select {
+        flex: 1;
+        min-width: fit-content;
+    }
                         }
                     </style>
                 </head>
@@ -539,7 +603,10 @@ class Livefiles extends ReadyResource {
                 <p>livefiles</p>
                 </nav>
                 <h1>Folder and Files: ${this.escapeHtml(urlPath)}</h1>
+                <div style="display: flex; flex-direction: row; justify-content: space-between; align-items: center">
                 <p class="go--back--btn" onclick="goback()">go back</p>
+                ${sortingControls}
+                </div>
                     <div class="container">
                    <div class="table--container">
                     <table>
@@ -549,7 +616,7 @@ class Livefiles extends ReadyResource {
                             <th>Size</th>
 
                         </tr>
-                        ${directoryList}
+                        ${fileRows}
                     </table>
                    </div>
                     ${createFormHtml}
@@ -563,6 +630,27 @@ class Livefiles extends ReadyResource {
                     </footer>
                 </body>
                 <script>
+                function reverseList() {
+              const table = document.querySelector('table');
+              const rows = Array.from(table.rows).slice(1);
+              rows.reverse()
+              
+              while (table.rows.length > 1) {
+                  table.deleteRow(1);
+              }
+              rows.forEach(row => {
+                  table.appendChild(row);
+              });
+          }
+            function updateSort() {
+    const sortBy = document.getElementById('sortBy').value;
+    const currentPath = window.location.pathname || '/';  // If pathname is empty, use root
+    const url = new URL(currentPath, window.location.origin);
+    url.searchParams.set('sort', sortBy);
+    url.searchParams.set('order', document.querySelector('.sort-order-btn').getAttribute('data-order') || 'asc');
+    window.location = url;
+}
+
                 function goback(){
                 window.history.back();
                 }
@@ -576,6 +664,33 @@ class Livefiles extends ReadyResource {
       res.writeHead(500, { 'Content-Type': 'text/plain' })
       res.end('Internal Server Error')
     }
+  }
+
+  getFileType(filename) {
+    const ext = path.extname(filename).toLowerCase();
+
+    const typeMap = {
+      // Images
+      '.jpg': 'image', '.jpeg': 'image', '.png': 'image',
+      '.gif': 'image', '.svg': 'image', '.webp': 'image',
+      // Documents
+      '.pdf': 'document', '.doc': 'document', '.docx': 'document',
+      '.txt': 'document', '.md': 'document', '.csv': 'document',
+      // Video
+      '.mp4': 'video', '.avi': 'video', '.mov': 'video',
+      '.wmv': 'video', '.webm': 'video', '.mkv': 'video',
+      // Audio
+      '.mp3': 'audio', '.wav': 'audio', '.ogg': 'audio',
+      '.m4a': 'audio', '.flac': 'audio',
+      // Archives
+      '.zip': 'archive', '.rar': 'archive', '.7z': 'archive',
+      '.tar': 'archive', '.gz': 'archive',
+      // Code
+      '.js': 'code', '.py': 'code', '.java': 'code',
+      '.html': 'code', '.css': 'code', '.php': 'code'
+    };
+
+    return typeMap[ext] || 'other';
   }
 
   formatBytes (bytes, decimals = 2) {
